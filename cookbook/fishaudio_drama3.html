@@ -509,6 +509,11 @@
                 <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#installation-and-startup">Installation and Startup</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#synthesize-speech">Synthesize Speech</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#example-usage">Example Usage</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#point-tags">Point tags</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#editing-as-continuation">Editing as continuation</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#serving-limits">Serving Limits</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reference-audio-length">Reference Audio Length</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#prompt-length">Prompt Length</a></li>
@@ -596,6 +601,56 @@ as a stream.</p>
 <span class="w">  </span>--output<span class="w"> </span>output_streaming.pcm
 </pre></div>
 </div>
+</section>
+<section id="example-usage">
+<h2>Example Usage<a class="headerlink" href="#example-usage" title="Link to this heading">#</a></h2>
+<p>The reference clip the samples below clone, unmodified:</p>
+<p>The reference, <code class="docutils literal notranslate"><span class="pre">en0</span></code> — a 3.9 s clip, the same <code class="docutils literal notranslate"><span class="pre">common_voice_en_10119832.wav</span></code> the cloning example above uses, with the transcript <code class="docutils literal notranslate"><span class="pre">We</span> <span class="pre">asked</span> <span class="pre">over</span> <span class="pre">twenty</span> <span class="pre">different</span> <span class="pre">people,</span> <span class="pre">and</span> <span class="pre">they</span> <span class="pre">all</span> <span class="pre">said</span> <span class="pre">it</span> <span class="pre">was</span> <span class="pre">his.</span></code>:</p>
+<audio controls>
+  <source src="https://github.com/user-attachments/files/33393249/en0.wav" type="audio/wav">
+</audio>
+<section id="point-tags">
+<h3>Point tags<a class="headerlink" href="#point-tags" title="Link to this heading">#</a></h3>
+<p>A plain <code class="docutils literal notranslate"><span class="pre">/v1/tts</span></code> request: one reference (<code class="docutils literal notranslate"><span class="pre">en0</span></code>), no history, and the tags written into the text at the position where the event should land.</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"text"</span><span class="p">:</span><span class="w"> </span><span class="s2">"[sighs] Fine. If we miss it, it's on you. [laughs] Well, maybe that's fair."</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"references"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"audio_path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"https://huggingface.co/datasets/zhaochenyang20/seed-tts-eval-mini/resolve/main/en/prompt-wavs/common_voice_en_10119832.wav"</span><span class="p">,</span><span class="w"> </span><span class="nt">"text"</span><span class="p">:</span><span class="w"> </span><span class="s2">"We asked over twenty different people, and they all said it was his."</span><span class="p">}]</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<audio controls>
+  <source src="https://github.com/user-attachments/files/33393205/A1_point_tags.wav" type="audio/wav">
+</audio>
+</section>
+<section id="editing-as-continuation">
+<h3>Editing as continuation<a class="headerlink" href="#editing-as-continuation" title="Link to this heading">#</a></h3>
+<p>Just send the previous VQ tokens and sent it as normal language models do.</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"text"</span><span class="p">:</span><span class="w"> </span><span class="s2">"The quarterly report is due on Thursday, so please finish it by noon."</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"references"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"audio_path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"https://huggingface.co/datasets/zhaochenyang20/seed-tts-eval-mini/resolve/main/en/prompt-wavs/common_voice_en_10119832.wav"</span><span class="p">,</span><span class="w"> </span><span class="nt">"text"</span><span class="p">:</span><span class="w"> </span><span class="s2">"We asked over twenty different people, and they all said it was his."</span><span class="p">}],</span>
+<span class="w">  </span><span class="nt">"previous_takes"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"The quarterly report is due on Wednesday, so please finish it by noon."</span><span class="p">]</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<audio controls>
+  <source src="https://github.com/user-attachments/files/33393156/K1_edit_word_with_context.wav" type="audio/wav">
+</audio>
+<p>A second edit chained onto the result of the first:</p>
+<p>K5 chains a second edit: <code class="docutils literal notranslate"><span class="pre">by</span> <span class="pre">noon</span></code> becomes <code class="docutils literal notranslate"><span class="pre">by</span> <span class="pre">five</span></code>, with both earlier takes in the context.</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"text"</span><span class="p">:</span><span class="w"> </span><span class="s2">"The quarterly report is due on Thursday, so please finish it by five."</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"references"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"audio_path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"https://huggingface.co/datasets/zhaochenyang20/seed-tts-eval-mini/resolve/main/en/prompt-wavs/common_voice_en_10119832.wav"</span><span class="p">,</span><span class="w"> </span><span class="nt">"text"</span><span class="p">:</span><span class="w"> </span><span class="s2">"We asked over twenty different people, and they all said it was his."</span><span class="p">}],</span>
+<span class="w">  </span><span class="nt">"previous_takes"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="s2">"The quarterly report is due on Wednesday, so please finish it by noon."</span><span class="p">,</span>
+<span class="w">    </span><span class="s2">"The quarterly report is due on Thursday, so please finish it by noon."</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<audio controls>
+  <source src="https://github.com/user-attachments/files/33393164/K5_second_edit_chained.wav" type="audio/wav">
+</audio>
+</section>
 </section>
 <section id="serving-limits">
 <h2>Serving Limits<a class="headerlink" href="#serving-limits" title="Link to this heading">#</a></h2>
@@ -893,6 +948,11 @@ Drama 3 tower fused layers: off, untested GPU sm_120
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#installation-and-startup">Installation and Startup</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#synthesize-speech">Synthesize Speech</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#example-usage">Example Usage</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#point-tags">Point tags</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#editing-as-continuation">Editing as continuation</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#serving-limits">Serving Limits</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reference-audio-length">Reference Audio Length</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#prompt-length">Prompt Length</a></li>
