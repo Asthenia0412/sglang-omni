@@ -70,7 +70,7 @@ curl -N -X POST http://localhost:8000/v1/audio/speech \
   --output output_streaming.pcm
 ```
 
-## Showcase
+## Example Usage
 
 The reference clip the samples below clone, unmodified:
 
