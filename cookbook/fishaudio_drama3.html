@@ -515,13 +515,14 @@
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#attention-backend">Attention Backend</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#deployment">Deployment</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#high-concurrency">High Concurrency</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#throughput-and-time-to-first-audio">Throughput and Time to First Audio</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#deployment-performance">Deployment Performance</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#high-concurrency">High Concurrency</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#production-serving">Production Serving</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#non-streaming-requests">Non-Streaming Requests</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#defaults-parameters">Defaults Parameters</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#links">Links</a></li>
 </ul>
             </nav>
         </div>
@@ -549,7 +550,7 @@
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>--prerelease<span class="o">=</span>allow<span class="w"> </span>-v<span class="w"> </span>-e<span class="w"> </span><span class="s2">".[fishaudio]"</span>
 </pre></div>
 </div>
-<p>Download the checkpoint, then start the server. This command places preprocessing, the engine, and the vocoder on GPU 0. A stage moves to another GPU only when its <code class="docutils literal notranslate"><span class="pre">--&lt;stage&gt;.gpu</span></code> flag says so; see <a class="reference internal" href="#deployment"><span class="std std-ref">Deployment</span></a>.</p>
+<p>Download the checkpoint, then start the server. This command places preprocessing, the engine, and the vocoder on GPU 0. A stage moves to another GPU only when its <code class="docutils literal notranslate"><span class="pre">--&lt;stage&gt;.gpu</span></code> flag says so; see Deployment.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>hf<span class="w"> </span>download<span class="w"> </span>fishaudio/drama-3
 
 sgl-omni<span class="w"> </span>serve<span class="w"> </span><span class="se">\</span>
@@ -636,8 +637,8 @@ the preprocessing stage. The budgets of all stages on the GPU must still fit the
 <h2>Attention Backend<a class="headerlink" href="#attention-backend" title="Link to this heading">#</a></h2>
 <p>Drama 3 runs its attention on the <code class="docutils literal notranslate"><span class="pre">triton</span></code> backend only. The server refuses to start with any other attention backend, for example <code class="docutils literal notranslate"><span class="pre">--tts_engine.engine.attention_backend</span> <span class="pre">fa3</span></code>.</p>
 </section>
-<section id="deployment">
-<h2>Deployment<a class="headerlink" href="#deployment" title="Link to this heading">#</a></h2>
+<section id="deployment-performance">
+<h2>Deployment Performance<a class="headerlink" href="#deployment-performance" title="Link to this heading">#</a></h2>
 <p>On one GPU the default placement works as is: every stage runs on GPU 0, with the vocoder in its own process. With two GPUs, put the vocoder on the second one, so its decoding no longer shares a GPU with the engine:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>sgl-omni<span class="w"> </span>serve<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--model-path<span class="w"> </span>&lt;checkpoint&gt;<span class="w"> </span><span class="se">\</span>
@@ -646,9 +647,8 @@ the preprocessing stage. The budgets of all stages on the GPU must still fit the
 </pre></div>
 </div>
 <p>When the engine and the vocoder share one GPU, <code class="docutils literal notranslate"><span class="pre">--mps</span> <span class="pre">on</span></code> lets their processes share it through CUDA MPS (see <a class="reference internal" href="../basic_usage/mps_dp.html"><span class="std std-doc">Same-GPU Data Parallelism with CUDA MPS</span></a>). It can raise throughput under high concurrency but may make a single stream slower; measure it with your own load before you keep it.</p>
-</section>
 <section id="high-concurrency">
-<h2>High Concurrency<a class="headerlink" href="#high-concurrency" title="Link to this heading">#</a></h2>
+<h3>High Concurrency<a class="headerlink" href="#high-concurrency" title="Link to this heading">#</a></h3>
 <p>The defaults run at most 16 requests at a time on the engine and give it 0.70 of the GPU’s memory. For more streams at once, raise the request cap; the measurements below also raise the engine’s share:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>sgl-omni<span class="w"> </span>serve<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--model-path<span class="w"> </span>&lt;checkpoint&gt;<span class="w"> </span><span class="se">\</span>
@@ -657,47 +657,106 @@ the preprocessing stage. The budgets of all stages on the GPU must still fit the
 </pre></div>
 </div>
 <p>These values are sized for an H200: the engine’s and the vocoder’s shares and the preprocessing reserve must fit one GPU together, which the server checks at startup.</p>
-<section id="throughput-and-time-to-first-audio">
-<h3>Throughput and Time to First Audio<a class="headerlink" href="#throughput-and-time-to-first-audio" title="Link to this heading">#</a></h3>
-<p>Measured on H200 GPUs with the settings above, the vocoder’s default share and streamed requests, 1,088 requests per concurrency level, each cloning a voice from one reference given as <code class="docutils literal notranslate"><span class="pre">vq_codes</span></code> with its transcript, with <code class="docutils literal notranslate"><span class="pre">max_new_tokens</span></code> 500, <code class="docutils literal notranslate"><span class="pre">temperature</span></code> 1.0, <code class="docutils literal notranslate"><span class="pre">top_p</span></code> 0.9 and <code class="docutils literal notranslate"><span class="pre">top_k</span></code> 30. Each figure is the average over six server starts; the throughput counts every frame the engine generates, including the end-of-speech frame that ends a stream:</p>
+</section>
+<section id="production-serving">
+<h3>Production Serving<a class="headerlink" href="#production-serving" title="Link to this heading">#</a></h3>
+<p>All numbers below were measured on NVIDIA H200 GPUs with streaming requests on Seed-TTS English prompts. Each request clones a voice from one pre-encoded reference (<code class="docutils literal notranslate"><span class="pre">vq_codes</span></code> with its transcript) and uses <code class="docutils literal notranslate"><span class="pre">temperature</span></code> 1.0, <code class="docutils literal notranslate"><span class="pre">top_p</span></code> 0.9, <code class="docutils literal notranslate"><span class="pre">top_k</span></code> 30 and <code class="docutils literal notranslate"><span class="pre">max_new_tokens</span></code> 500. Throughput counts generated acoustic frames per second. TTFA is the time to first audio. RTF is the time from sending a request to its last audio chunk, divided by the duration of the returned audio.</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
-<tr class="row-odd"><th class="head"><p>Vocoder</p></th>
-<th class="head"><p>Concurrent streams</p></th>
-<th class="head"><p>Median time to first audio</p></th>
-<th class="head"><p>95th percentile</p></th>
-<th class="head"><p>Throughput (generated frames/s)</p></th>
+<tr class="row-odd"><th class="head text-right"><p>Concurrency</p></th>
+<th class="head text-right"><p>Throughput (frames/s)</p></th>
+<th class="head text-right"><p>TTFA p50</p></th>
+<th class="head text-right"><p>TTFA p95</p></th>
+<th class="head text-right"><p>RTF (mean)</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>On the engine’s GPU</p></td>
-<td><p>128</p></td>
-<td><p>685 ms</p></td>
-<td><p>1,412 ms</p></td>
-<td><p>2,177</p></td>
+<tr class="row-even"><td class="text-right"><p>1</p></td>
+<td class="text-right"><p>166.7</p></td>
+<td class="text-right"><p>88.9 ms</p></td>
+<td class="text-right"><p>90.8 ms</p></td>
+<td class="text-right"><p>0.131</p></td>
 </tr>
-<tr class="row-odd"><td><p>On the engine’s GPU</p></td>
-<td><p>256</p></td>
-<td><p>3,403 ms</p></td>
-<td><p>4,255 ms</p></td>
-<td><p>2,422</p></td>
+<tr class="row-odd"><td class="text-right"><p>2</p></td>
+<td class="text-right"><p>287.0</p></td>
+<td class="text-right"><p>96.2 ms</p></td>
+<td class="text-right"><p>130.1 ms</p></td>
+<td class="text-right"><p>0.152</p></td>
 </tr>
-<tr class="row-even"><td><p>On a second GPU</p></td>
-<td><p>128</p></td>
-<td><p>401 ms</p></td>
-<td><p>995 ms</p></td>
-<td><p>3,692</p></td>
+<tr class="row-even"><td class="text-right"><p>4</p></td>
+<td class="text-right"><p>467.6</p></td>
+<td class="text-right"><p>108.2 ms</p></td>
+<td class="text-right"><p>156.4 ms</p></td>
+<td class="text-right"><p>0.186</p></td>
 </tr>
-<tr class="row-odd"><td><p>On a second GPU</p></td>
-<td><p>256</p></td>
-<td><p>2,146 ms</p></td>
-<td><p>2,469 ms</p></td>
-<td><p>4,160</p></td>
+<tr class="row-odd"><td class="text-right"><p>8</p></td>
+<td class="text-right"><p>678.1</p></td>
+<td class="text-right"><p>153.2 ms</p></td>
+<td class="text-right"><p>210.9 ms</p></td>
+<td class="text-right"><p>0.256</p></td>
+</tr>
+<tr class="row-even"><td class="text-right"><p>16</p></td>
+<td class="text-right"><p>927.6</p></td>
+<td class="text-right"><p>210.1 ms</p></td>
+<td class="text-right"><p>287.2 ms</p></td>
+<td class="text-right"><p>0.373</p></td>
+</tr>
+<tr class="row-odd"><td class="text-right"><p>32</p></td>
+<td class="text-right"><p>1,244.7</p></td>
+<td class="text-right"><p>304.6 ms</p></td>
+<td class="text-right"><p>396.1 ms</p></td>
+<td class="text-right"><p>0.551</p></td>
+</tr>
+<tr class="row-even"><td class="text-right"><p>64</p></td>
+<td class="text-right"><p>1,687.3</p></td>
+<td class="text-right"><p>450.9 ms</p></td>
+<td class="text-right"><p>1,020.1 ms</p></td>
+<td class="text-right"><p>0.801</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p>With the vocoder on the engine’s GPU, at 256 streams the vocoder runs at full load and each new stream’s first audio waits in its queue. When you need many concurrent streams and a short time to first audio together, put the vocoder on a second GPU, as under <a class="reference internal" href="#deployment"><span class="std std-ref">Deployment</span></a>: at 256 streams that gave about 72% more throughput and a 37% shorter median time to first audio.</p>
+<p><em>Table 1. Drama 3 streaming performance on one H200. Each cell is the mean of four runs.</em></p>
+<p>A single stream gets its first audio in under 100 ms. At concurrency 16, audio is still generated about 2.7× faster than it plays back, and at concurrency 64 mean RTF stays at 0.80. In SGLang-Omni, how the pipeline stages are grouped into processes and placed on GPUs is deployment-time configuration rather than per-model code. Table 2 uses this to compare two vocoder placements at higher concurrency, with the vocoder’s default GPU share, 1,088 requests per concurrency level, and the average of six server starts. Its throughput also counts the end-of-speech frame that ends each stream.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Vocoder placement</p></th>
+<th class="head text-right"><p>Concurrency</p></th>
+<th class="head text-right"><p>Throughput (frames/s)</p></th>
+<th class="head text-right"><p>TTFA p50</p></th>
+<th class="head text-right"><p>TTFA p95</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Engine’s GPU</p></td>
+<td class="text-right"><p>128</p></td>
+<td class="text-right"><p>2,177</p></td>
+<td class="text-right"><p>685 ms</p></td>
+<td class="text-right"><p>1,412 ms</p></td>
+</tr>
+<tr class="row-odd"><td><p>Engine’s GPU</p></td>
+<td class="text-right"><p>256</p></td>
+<td class="text-right"><p>2,422</p></td>
+<td class="text-right"><p>3,403 ms</p></td>
+<td class="text-right"><p>4,255 ms</p></td>
+</tr>
+<tr class="row-even"><td><p>Second GPU</p></td>
+<td class="text-right"><p>128</p></td>
+<td class="text-right"><p>3,692</p></td>
+<td class="text-right"><p>401 ms</p></td>
+<td class="text-right"><p>995 ms</p></td>
+</tr>
+<tr class="row-odd"><td><p>Second GPU</p></td>
+<td class="text-right"><p>256</p></td>
+<td class="text-right"><p>4,160</p></td>
+<td class="text-right"><p>2,146 ms</p></td>
+<td class="text-right"><p>2,469 ms</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><em>Table 2. Drama 3 streaming performance by vocoder placement. Each cell is the mean of six server starts.</em></p>
+<p>With the vocoder on the engine’s GPU, at 256 streams the vocoder is fully loaded and each new stream’s first audio waits in its queue. Moving it to a second GPU, as described under <a class="reference external" href="https://sgl-project.github.io/sglang-omni/cookbook/fishaudio_drama3.html#deployment">Deployment</a>, gave about 72% more throughput and a 37% lower median TTFA at 256 streams. Use this layout when you need many concurrent streams and a short time to first audio together.</p>
 </section>
 <section id="non-streaming-requests">
 <h3>Non-Streaming Requests<a class="headerlink" href="#non-streaming-requests" title="Link to this heading">#</a></h3>
@@ -707,7 +766,7 @@ by default) and logs:</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Drama 3 vocoder: a non-streaming decode takes up to &lt;frames&gt; padded frames of &lt;bytes&gt; bytes each; share &lt;share&gt; GiB, held &lt;held&gt; GiB
 </pre></div>
 </div>
-<p>The limit does not count the memory the vocoder process holds outside PyTorch’s allocator, so it cannot guarantee that the process stays within its share. With the engine’s share raised to 0.85 on the same GPU, concurrent non-streaming requests can run out of GPU memory. To avoid that, stream those requests (<code class="docutils literal notranslate"><span class="pre">&quot;stream&quot;:</span> <span class="pre">true</span></code>), keep the engine’s default share of 0.70 on the GPU that runs the vocoder, or put the vocoder on a second GPU, as under <a class="reference internal" href="#deployment"><span class="std std-ref">Deployment</span></a>.</p>
+<p>The limit does not count the memory the vocoder process holds outside PyTorch’s allocator, so it cannot guarantee that the process stays within its share. With the engine’s share raised to 0.85 on the same GPU, concurrent non-streaming requests can run out of GPU memory. To avoid that, stream those requests (<code class="docutils literal notranslate"><span class="pre">&quot;stream&quot;:</span> <span class="pre">true</span></code>), keep the engine’s default share of 0.70 on the GPU that runs the vocoder, or put the vocoder on a second GPU, as under Deployment.</p>
 </section>
 </section>
 <section id="defaults-parameters">
@@ -773,6 +832,16 @@ Drama 3 tower fused layers: off, untested GPU sm_120
 </pre></div>
 </div>
 </section>
+<section id="links">
+<h2>Links<a class="headerlink" href="#links" title="Link to this heading">#</a></h2>
+<ul class="simple">
+<li><p><a class="reference external" href="https://fish.audio">Fish Audio Playground</a></p></li>
+<li><p><a class="reference external" href="https://github.com/fishaudio/fish-speech">Fish Speech GitHub</a></p></li>
+<li><p><a class="reference external" href="https://github.com/fishaudio/fish-speech/tree/main/docs/assets/Fish_Audio_Drama_3_Technical_Report.pdf">Technical Report</a></p></li>
+<li><p><a class="reference external" href="https://sgl-project.github.io/sglang-omni/cookbook/fishaudio_drama3.html">Fish Audio Drama 3 SGLang Omni Cookbook</a></p></li>
+<li><p><a class="reference external" href="https://sgl-project.github.io/sglang-omni/">SGLang Omni</a></p></li>
+</ul>
+</section>
 </section>
 
 
@@ -830,13 +899,14 @@ Drama 3 tower fused layers: off, untested GPU sm_120
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#attention-backend">Attention Backend</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#deployment">Deployment</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#high-concurrency">High Concurrency</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#throughput-and-time-to-first-audio">Throughput and Time to First Audio</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#deployment-performance">Deployment Performance</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#high-concurrency">High Concurrency</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#production-serving">Production Serving</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#non-streaming-requests">Non-Streaming Requests</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#defaults-parameters">Defaults Parameters</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#links">Links</a></li>
 </ul>
   </nav></div>
 
