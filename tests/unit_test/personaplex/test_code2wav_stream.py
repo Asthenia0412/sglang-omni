@@ -11,7 +11,10 @@ from sglang_omni.models.personaplex import mimi_decode_graph
 from sglang_omni.models.personaplex.architecture import SAMPLE_RATE, SAMPLES_PER_FRAME
 from sglang_omni.models.personaplex.code2wav_stream import PersonaPlexCode2WavScheduler
 from sglang_omni.models.personaplex.components.mimi import MimiCodec
-from sglang_omni.models.personaplex.mimi_decode_graph import MimiDecodeSlots
+from sglang_omni.models.personaplex.mimi_decode_graph import (
+    DecodeSlot,
+    MimiDecodeSlots,
+)
 from sglang_omni.models.personaplex.payload_types import PersonaPlexState
 from sglang_omni.pipeline.stage.stream_queue import StreamItem
 from sglang_omni.platforms import current_platform
@@ -199,6 +202,30 @@ def test_chunk_ramp_holds_frames_until_each_target_width(
     torch.testing.assert_close(
         decode_waveform(result.data.data), whole, atol=1e-5, rtol=1e-5
     )
+
+
+def test_chunk_ramp_decodes_each_width_once(random_codec: MimiCodec) -> None:
+    codec = random_codec
+    scheduler = new_scheduler(codec, (1, 3))
+    decoded_widths: list[int] = []
+    decode_step = scheduler.decode_slots.decode_step
+
+    def counting_decode_step(
+        codes_BKF: torch.Tensor, slot: DecodeSlot
+    ) -> torch.Tensor:
+        decoded_widths.append(int(codes_BKF.shape[-1]))
+        return decode_step(codes_BKF, slot)
+
+    scheduler.decode_slots.decode_step = counting_decode_step
+    codes = torch.randint(
+        0, 2048, (5, 8), generator=torch.Generator().manual_seed(11)
+    )
+    start_stream(scheduler, "a")
+    for frame in range(codes.shape[0]):
+        push_frames(scheduler, "a", codes[frame : frame + 1])
+    assert decoded_widths == [1, 3]
+    scheduler.on_stream_done("a")
+    assert decoded_widths == [1, 3, 1]
 
 
 def test_chunk_ramp_decodes_burst_messages_frame_exactly(

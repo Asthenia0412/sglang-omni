@@ -37,6 +37,8 @@ from sglang_omni.sampling.seed import derive_sampling_seed
 from sglang_omni.scheduling.message import OutgoingMessage
 from sglang_omni.scheduling.sglang_backend.request_data import SGLangARRequestData
 from sglang_omni.scheduling.types import RequestOutput
+from sglang_omni.utils.device import supports_device_streams
+
 
 SEED_NAMESPACE = "personaplex"
 # Note (wilsonzheng0327): The client fills these into every request, so a value equal
@@ -325,18 +327,28 @@ def lm_stream_output_builder(
         return []
     else:
         pass
-    frames = torch.stack(pending).cpu()
+    # note (guozhihao): stack copies the frame off the depformer's storage.
+    # Same-process code2wav waits on this event instead of a host sync.
+    frames = torch.stack(pending).detach()
     pending.clear()
+    metadata: dict[str, object] = {
+        "modality": "audio_codes",
+        "num_samples": data.talker_model_inputs["num_samples"],
+    }
+    if supports_device_streams(frames.device):
+        device_module = torch.get_device_module(frames.device)
+        codes_ready_event = device_module.Event()
+        codes_ready_event.record(device_module.current_stream(frames.device))
+        metadata["codes_ready_event"] = codes_ready_event
+    else:
+        pass 
     return [
         OutgoingMessage(
             request_id=request_id,
             type="stream",
             data=frames,
             target=CODE2WAV_STAGE,
-            metadata={
-                "modality": "audio_codes",
-                "num_samples": data.talker_model_inputs["num_samples"],
-            },
+            metadata=metadata,
         )
     ]
 
