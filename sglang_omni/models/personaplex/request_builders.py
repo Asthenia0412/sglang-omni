@@ -39,7 +39,6 @@ from sglang_omni.scheduling.sglang_backend.request_data import SGLangARRequestDa
 from sglang_omni.scheduling.types import RequestOutput
 from sglang_omni.utils.device import supports_device_streams
 
-
 SEED_NAMESPACE = "personaplex"
 # Note (wilsonzheng0327): The client fills these into every request, so a value equal
 # to one of them only counts when the caller listed the field as explicit.
@@ -327,8 +326,9 @@ def lm_stream_output_builder(
         return []
     else:
         pass
-    # note (guozhihao): stack copies the frame off the depformer's storage.
-    # Same-process code2wav waits on this event instead of a host sync.
+    # note (guozhihao-224): pending_frames already holds output_frame's clone; stack
+    # copies that clone and the event is recorded after the stack, so
+    # same-process code2wav waits instead of a host sync.
     frames = torch.stack(pending).detach()
     pending.clear()
     metadata: dict[str, object] = {
@@ -341,7 +341,7 @@ def lm_stream_output_builder(
         codes_ready_event.record(device_module.current_stream(frames.device))
         metadata["codes_ready_event"] = codes_ready_event
     else:
-        pass 
+        pass
     return [
         OutgoingMessage(
             request_id=request_id,

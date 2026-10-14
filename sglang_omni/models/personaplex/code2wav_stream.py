@@ -153,9 +153,14 @@ class PersonaPlexCode2WavScheduler(StreamingSimpleScheduler):
         """Decode the oldest frame_count frames of pending codes and emit the chunk."""
         device = self.decode_slots.codec.device
         queued_codes = list(state.pending_codes)
-        pending_codes = torch.cat(queued_codes)
+        if len(queued_codes) == 1 and queued_codes[0].is_contiguous():
+            pending_codes = queued_codes[0]
+        else:
+            pending_codes = torch.cat(queued_codes)
         # note (guozhihao): record_stream only covers work already queued, so
         # each tensor is marked after the cat or decode kernel that reads it.
+        # cat copies even one contiguous chunk, so that chunk is kept and only
+        # the storage decode reads is marked.
         if supports_device_streams(device):
             consumer_stream = torch.get_device_module(device).current_stream(device)
             for queued in queued_codes:
