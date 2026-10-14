@@ -463,7 +463,7 @@ SUPPORTED_SPEECH_FIELDS = frozenset(
 REFUSED_SPEECH_FIELDS: dict[str, tuple[dict[str, object], str]] = {
     "unknown-empty-dict": ({"stage_sampling": {}}, "stage_sampling"),
     "unknown-null": ({"stage_sampling": None}, "stage_sampling"),
-    "unknown-false": ({"infill": False}, "infill"),
+    "unknown-false": ({"not_a_speech_field": False}, "not_a_speech_field"),
     "unknown-zero": ({"prefix_audio_codes": 0}, "prefix_audio_codes"),
     "unsupported-empty-dict": ({"stage_params": {}}, "stage_params"),
     "unsupported-empty-string": ({"instructions": ""}, "instructions"),

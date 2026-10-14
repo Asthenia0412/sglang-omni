@@ -10,7 +10,7 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, NotRequired, TypeAlias, TypedDict
 from urllib.parse import urlparse
 
 from pydantic import AliasChoices, BaseModel, ValidationError
@@ -95,9 +95,17 @@ class TTSParams(RequiredTTSParams, total=False):
 SpeechReferenceDescriptor = dict[str, str | int | list[int] | list[list[int]]]
 
 
+class SpeechInfillPrompt(TypedDict):
+    prefix: SpeechReferenceDescriptor
+    suffix: SpeechReferenceDescriptor
+    audio_tokens: NotRequired[int]
+
+
 class SpeechPrompt(TypedDict):
     text: str
     references: list[SpeechReferenceDescriptor]
+    previous_takes: NotRequired[list[SpeechReferenceDescriptor]]
+    infill: NotRequired[SpeechInfillPrompt]
 
 
 class SpeechRequestUpdates(TypedDict, total=False):
@@ -1121,6 +1129,10 @@ def build_sampling_params(request: CreateSpeechRequest) -> SamplingParams:
     )
 
 
+def reference_descriptor(reference: SpeechReference) -> SpeechReferenceDescriptor:
+    return reference.model_dump(exclude_none=True)
+
+
 def build_speech_prompt(
     request: CreateSpeechRequest,
     reference_descriptors: list[SpeechReferenceDescriptor] | None,
@@ -1129,8 +1141,32 @@ def build_speech_prompt(
         reference_descriptors = reference_descriptors_from_request(request)
     else:
         pass
-    if reference_descriptors:
-        return {"text": request.input, "references": reference_descriptors}
+    previous_takes = [
+        reference_descriptor(take) for take in request.previous_takes or []
+    ]
+    infill = request.infill
+    if reference_descriptors or previous_takes or infill is not None:
+        prompt: SpeechPrompt = {
+            "text": request.input,
+            "references": reference_descriptors,
+        }
+        if previous_takes:
+            prompt["previous_takes"] = previous_takes
+        else:
+            pass
+        if infill is not None:
+            infill_prompt: SpeechInfillPrompt = {
+                "prefix": reference_descriptor(infill.prefix),
+                "suffix": reference_descriptor(infill.suffix),
+            }
+            if infill.audio_tokens is not None:
+                infill_prompt["audio_tokens"] = infill.audio_tokens
+            else:
+                pass
+            prompt["infill"] = infill_prompt
+        else:
+            pass
+        return prompt
     else:
         pass
     return request.input

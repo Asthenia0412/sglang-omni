@@ -13,7 +13,10 @@ from sglang_omni.models.fishaudio_drama3.prompt import (
     SEMANTIC_BEGIN_TOKEN,
     SPEAKER_IDS,
     SPEAKER_TAG_PATTERN,
+    InfillSpan,
     ReferencePart,
+    SpokenTake,
+    audio_frame_rows,
     build_prompt_rows,
     with_speaker_tag,
 )
@@ -79,10 +82,29 @@ def given_integer(
         return value
 
 
-def speech_inputs(inputs: object) -> tuple[str, list[Mapping[str, object]]]:
-    """The text to speak and the reference descriptors of a lowered speech prompt."""
+def mapping_list(value: object, location: str) -> list[Mapping[str, object]]:
+    """A JSON list of objects, or an empty list when the field was omitted."""
+    if value is None:
+        return []
+    elif not isinstance(value, list) or not all(
+        isinstance(item, Mapping) for item in value
+    ):
+        raise ValueError(f"{REQUEST_ERROR_PREFIX} {location} must be a list of objects")
+    else:
+        return value
+
+
+def speech_inputs(
+    inputs: object,
+) -> tuple[
+    str,
+    list[Mapping[str, object]],
+    list[Mapping[str, object]],
+    Mapping[str, object] | None,
+]:
+    """Text, references, previous takes and the infill span of a lowered prompt."""
     if isinstance(inputs, str):
-        return inputs, []
+        return inputs, [], [], None
     elif not isinstance(inputs, Mapping) or not isinstance(inputs.get("text"), str):
         raise ValueError(
             f"{REQUEST_ERROR_PREFIX} the speech input must be text or an object with "
@@ -90,24 +112,35 @@ def speech_inputs(inputs: object) -> tuple[str, list[Mapping[str, object]]]:
         )
     else:
         pass
-    references = inputs.get("references") or []
-    if not isinstance(references, list) or not all(
-        isinstance(reference, Mapping) for reference in references
-    ):
-        raise ValueError(f"{REQUEST_ERROR_PREFIX} references must be a list of objects")
+    infill = inputs.get("infill")
+    if infill is not None and not isinstance(infill, Mapping):
+        raise ValueError(f"{REQUEST_ERROR_PREFIX} infill must be an object")
     else:
-        return inputs["text"], references
+        return (
+            inputs["text"],
+            mapping_list(inputs.get("references"), "references"),
+            mapping_list(inputs.get("previous_takes"), "previous_takes"),
+            infill,
+        )
 
 
-def reference_codes(vq_codes: object, index: int) -> torch.Tensor:
+def reference_codes(
+    vq_codes: object, location: str, *, allow_empty: bool = False
+) -> torch.Tensor:
     """A reference's VQ codes as a CPU int64 tensor; the prompt builder checks shape
     and codebook range."""
-    is_integer_grid = (
+    rows_are_lists = (
         isinstance(vq_codes, list)
         and bool(vq_codes)
+        and all(isinstance(row, list) for row in vq_codes)
+    )
+    is_empty_grid = (
+        allow_empty and rows_are_lists and all(row == [] for row in vq_codes)
+    )
+    is_integer_grid = (
+        rows_are_lists
         and all(
-            isinstance(row, list)
-            and bool(row)
+            bool(row)
             and all(
                 isinstance(code, int)
                 and not isinstance(code, bool)
@@ -118,9 +151,11 @@ def reference_codes(vq_codes: object, index: int) -> torch.Tensor:
         )
         and len({len(row) for row in vq_codes}) == 1
     )
-    if not is_integer_grid:
+    if is_empty_grid:
+        return torch.zeros((len(vq_codes), 0), dtype=torch.int64, device="cpu")
+    elif not is_integer_grid:
         raise ValueError(
-            f"{REQUEST_ERROR_PREFIX} references.{index}.vq_codes must be a "
+            f"{REQUEST_ERROR_PREFIX} {location}.vq_codes must be a "
             f"[codebooks, frames] grid of int64 integers"
         )
     else:
@@ -148,7 +183,9 @@ class Drama3SpeechPreprocessor:
             )
         else:
             pass
+        assert semantic_begin_id is not None
         self.tokenizer = tokenizer
+        self.semantic_begin_id = semantic_begin_id
         self.num_codebooks = config.audio_decoder_config.num_codebooks
         self.codebook_size = config.audio_decoder_config.vocab_size
         self.max_prompt_rows = checked_int(
@@ -212,7 +249,23 @@ class Drama3SpeechPreprocessor:
         else:
             pass
 
-        text, reference_descriptors = speech_inputs(request.inputs)
+        text, reference_descriptors, previous_take_descriptors, infill = speech_inputs(
+            request.inputs
+        )
+        if infill is not None and request.params.get("stream"):
+            raise ValueError(
+                f"{REQUEST_ERROR_PREFIX} infill does not stream; the kept audio is "
+                f"spliced around the generated span"
+            )
+        elif infill is not None and (
+            reference_descriptors or previous_take_descriptors
+        ):
+            raise ValueError(
+                f"{REQUEST_ERROR_PREFIX} infill does not take references or "
+                f"previous takes"
+            )
+        else:
+            pass
         transcripts: list[str] = []
         for index, descriptor in enumerate(reference_descriptors):
             transcript = descriptor.get("text") or ""
@@ -222,10 +275,14 @@ class Drama3SpeechPreprocessor:
                 )
             else:
                 transcripts.append(transcript)
+        previous_take_texts = [
+            self.take_text(descriptor, f"previous_takes.{index}")
+            for index, descriptor in enumerate(previous_take_descriptors)
+        ]
         # Malformed tags, an unbounded run of digits included, are left to the builder.
         other_speaker_ids = {
             int(speaker_tag.group(1))
-            for speech_text in [text, *transcripts]
+            for speech_text in [text, *transcripts, *previous_take_texts]
             for speaker_tag in SPEAKER_TAG_PATTERN.finditer(speech_text)
             if speaker_tag.group(1) in SPEAKER_IDS - {"0"}
         }
@@ -239,12 +296,26 @@ class Drama3SpeechPreprocessor:
         references = [
             ReferencePart(
                 transcript=with_speaker_tag(transcript, 0),
-                audio_codes=self.reference_audio_codes(descriptor, index),
+                audio_codes=self.reference_audio_codes(
+                    descriptor, f"references.{index}"
+                ),
             )
             for index, (descriptor, transcript) in enumerate(
                 zip(reference_descriptors, transcripts, strict=True)
             )
         ]
+        previous_takes = [
+            SpokenTake(
+                text=take_text,
+                audio_codes=self.reference_audio_codes(
+                    descriptor, f"previous_takes.{index}"
+                ),
+            )
+            for index, (descriptor, take_text) in enumerate(
+                zip(previous_take_descriptors, previous_take_texts, strict=True)
+            )
+        ]
+        infill_span = None if infill is None else self.infill_span(infill)
         try:
             prompt_rows = build_prompt_rows(
                 text,
@@ -252,6 +323,8 @@ class Drama3SpeechPreprocessor:
                 self.tokenizer,
                 num_codebooks=self.num_codebooks,
                 codebook_size=self.codebook_size,
+                previous_takes=previous_takes,
+                infill_span=infill_span,
             )
         except ValueError as error:
             raise ValueError(f"{REQUEST_ERROR_PREFIX} {error}") from error
@@ -271,28 +344,93 @@ class Drama3SpeechPreprocessor:
                 temperature=temperature,
                 top_k=top_k,
                 top_p=top_p,
+                kept_prefix_rows=(
+                    None
+                    if infill_span is None
+                    else audio_frame_rows(
+                        infill_span.prefix_codes, self.semantic_begin_id
+                    )
+                ),
+                kept_suffix_rows=(
+                    None
+                    if infill_span is None
+                    else audio_frame_rows(
+                        infill_span.suffix_codes, self.semantic_begin_id
+                    )
+                ),
             ),
         )
 
-    def reference_audio_codes(
-        self, descriptor: Mapping[str, object], index: int
+    def take_text(self, descriptor: Mapping[str, object], location: str) -> str:
+        text = descriptor.get("text")
+        if not isinstance(text, str):
+            raise ValueError(f"{REQUEST_ERROR_PREFIX} {location}.text must be a string")
+        else:
+            return text
+
+    def infill_span(self, infill: Mapping[str, object]) -> InfillSpan:
+        prefix = infill.get("prefix")
+        suffix = infill.get("suffix")
+        if not isinstance(prefix, Mapping) or not isinstance(suffix, Mapping):
+            raise ValueError(
+                f"{REQUEST_ERROR_PREFIX} infill.prefix and infill.suffix must be objects"
+            )
+        else:
+            pass
+        audio_token_count = infill.get("audio_tokens")
+        if audio_token_count is None:
+            span_audio_tokens = None
+        elif (
+            isinstance(audio_token_count, int)
+            and not isinstance(audio_token_count, bool)
+            and audio_token_count >= 1
+        ):
+            span_audio_tokens = audio_token_count
+        else:
+            raise ValueError(
+                f"{REQUEST_ERROR_PREFIX} infill.audio_tokens must be an integer >= 1; "
+                f"got {audio_token_count!r}"
+            )
+        return InfillSpan(
+            prefix_codes=self.span_codes(prefix, "infill.prefix"),
+            suffix_codes=self.span_codes(suffix, "infill.suffix"),
+            audio_token_count=span_audio_tokens,
+        )
+
+    def span_codes(
+        self, descriptor: Mapping[str, object], location: str
     ) -> torch.Tensor:
-        """A reference's given VQ codes, or its audio encoded into codes."""
+        """One side of an infill. No audio means that side of the recording is empty."""
+        if descriptor.get(
+            "vq_codes"
+        ) is None and not fish_reference_payload_is_supported(descriptor):
+            return torch.zeros((self.num_codebooks, 0), dtype=torch.int64, device="cpu")
+        else:
+            return self.reference_audio_codes(descriptor, location, allow_empty=True)
+
+    def reference_audio_codes(
+        self,
+        descriptor: Mapping[str, object],
+        location: str,
+        *,
+        allow_empty: bool = False,
+    ) -> torch.Tensor:
+        """A clip's given VQ codes, or its audio encoded into codes."""
         vq_codes = descriptor.get("vq_codes")
         if vq_codes is not None:
-            return reference_codes(vq_codes, index)
+            return reference_codes(vq_codes, location, allow_empty=allow_empty)
         elif fish_reference_payload_is_supported(descriptor):
             try:
                 return self.reference_encoder.get_or_encode(
-                    dict(descriptor), desc=f"Drama 3 reference {index}"
+                    dict(descriptor), desc=f"Drama 3 {location}"
                 )
             except ValueError as error:
                 # note (SunskyXH): audio that does not decode raises ValueError (PyAV's
                 # InvalidDataError is one); codec or device failures stay 500s.
                 raise ValueError(
-                    f"{REQUEST_ERROR_PREFIX} references.{index}: {error}"
+                    f"{REQUEST_ERROR_PREFIX} {location}: {error}"
                 ) from error
         else:
             raise ValueError(
-                f"{REQUEST_ERROR_PREFIX} references.{index} needs audio or vq_codes"
+                f"{REQUEST_ERROR_PREFIX} {location} needs audio or vq_codes"
             )

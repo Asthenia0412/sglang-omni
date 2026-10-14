@@ -366,6 +366,20 @@ class SpeechReference(BaseModel):
     vq_codes: list[list[int]] | list[int] | None = None
 
 
+class SpeechInfill(BaseModel):
+    """Audio kept around one regenerated span.
+
+    prefix is the recording before the edit and suffix is the recording after
+    it. audio_tokens, when set, is the duration hint for the new span, in frames.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    prefix: SpeechReference
+    suffix: SpeechReference
+    audio_tokens: int | None = Field(default=None, ge=1)
+
+
 class CreateSpeechRequest(BaseModel):
     """OpenAI-compatible text-to-speech request.
 
@@ -396,6 +410,8 @@ class CreateSpeechRequest(BaseModel):
     ref_audio: str | None = None  # path or URL to reference audio
     ref_text: str | None = None  # transcript of reference audio
     references: list[SpeechReference] | None = None  # S2-Pro-style refs
+    previous_takes: list[SpeechReference] | None = None
+    infill: SpeechInfill | None = None
     x_vector_only_mode: bool | None = None
     stream_codec_output: bool | None = None
     suppress_bootstrap_silence: bool | None = None
