@@ -150,8 +150,25 @@ def reference_evaluate(args: argparse.Namespace) -> int:
 def unified_score(args: argparse.Namespace) -> int:
     unified = score_tree(args.tree)
     summary_path = args.tree / "summary.json"
-    official = read_json(summary_path)["subsets"] if summary_path.exists() else {}
+    summary = read_json(summary_path) if summary_path.exists() else None
+    changed = (
+        []
+        if summary is None
+        else [
+            name
+            for name in ("manifest_sha256", "asr_sha256")
+            if summary[name] != unified[name]
+        ]
+    )
+    official = summary["subsets"] if summary is not None and not changed else {}
     print(render(unified, official))
+    if changed:
+        print(
+            f"summary.json has a different {' and '.join(changed)} than this tree; "
+            "official reference numbers omitted"
+        )
+    else:
+        pass
     return 0
 
 

@@ -93,7 +93,7 @@ It refuses a tree without `asr.json`, stops if the transcript or annotation of a
 - `unified.json`: per subset, the counts, `coverage` and every metric with its interval, plus `selected_bounds` for sample shares and `min_observable_s` for turn-taking and interruption. Only the median latency has an interval, not p90. At the top are the definitions version (`fdb-v1.0-unified-3`) and the hashes of `manifest.json` and `asr.json`.
 - `unified-samples.jsonl`: one row per selected sample of the four scored subsets (`icc_backchannel` has no rows) with every per-sample quantity, including the pause flags `pause_intrusion`, `inside_pause_onset`, `pre_pause_speech`, `carry_in` and `any_speech`. Ineligible rows keep their sample id, subset and task and add their reasons.
 
-It prints each subset's metrics as value, interval and count, with the bounds over all selected samples for each share. When `reference-evaluate` has written `summary.json`, the official numbers are printed below them; `summary.json` is never written or used for scoring. Rerunning on the same tree writes the same bytes.
+It prints each subset's metrics as value, interval and count, with the bounds over all selected samples for each share. When `reference-evaluate` has written `summary.json` from the same `manifest.json` and `asr.json`, its numbers are printed below them as the reference column; if either hash differs, the column is left out and a line says which input changed. Interruption numbers rated by a judge other than the official one are labeled with that judge's model instead of `official`. `summary.json` is never written or used for scoring. Rerunning on the same tree writes the same bytes.
 
 ## Not measured
 

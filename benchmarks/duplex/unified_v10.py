@@ -522,6 +522,15 @@ def describe(metric: dict[str, JsonValue]) -> str:
         )
 
 
+def reference_label(entry: dict[str, JsonValue]) -> str:
+    """Official unless a non-official judge rated the subset; then name that judge."""
+    judge = entry["judge"]
+    if judge is None or judge["official"]:
+        return "official"
+    else:
+        return f"reference (judge {'+'.join(judge['sent_models'])}, not official)"
+
+
 def render(unified: dict[str, JsonValue], official: dict[str, JsonValue]) -> str:
     """Per-subset summary; official holds summary.json subsets for the reference column."""
     lines = [f"definitions {unified['definitions_version']}"]
@@ -541,10 +550,12 @@ def render(unified: dict[str, JsonValue], official: dict[str, JsonValue]) -> str
             f"  {name:<26} {describe(metric)}"
             for name, metric in result["metrics"].items()
         )
-        lines.extend(
-            f"  official {label:<17} {value:.3f}"
-            for label, value in (
-                official[subset]["result"] if subset in official else {}
-            ).items()
-        )
+        if subset in official:
+            prefix = reference_label(official[subset])
+            lines.extend(
+                f"  {prefix} {label:<17} {value:.3f}"
+                for label, value in official[subset]["result"].items()
+            )
+        else:
+            pass
     return "\n".join(lines)

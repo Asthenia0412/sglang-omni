@@ -17,6 +17,7 @@ import pytest
 
 from benchmarks.duplex import unified_v10
 from benchmarks.duplex.reference_v10 import MANIFEST_KIND
+from benchmarks.duplex.run_artifacts import file_sha256
 from benchmarks.eval.benchmark_duplex_v10 import main
 
 PAUSES = [{"text": "[PAUSE]", "timestamp": [1.0, 2.0]}]
@@ -148,6 +149,33 @@ def run_cli(tree: Path) -> str:
     with contextlib.redirect_stdout(stdout):
         assert main(["unified-score", "--tree", str(tree)]) == 0
     return stdout.getvalue()
+
+
+def write_summary(tree: Path) -> dict:
+    """A summary.json as reference-evaluate writes it, with a local interruption judge."""
+    local_judge = {
+        "official": False,
+        "base_url": "http://127.0.0.1:8000/v1/",
+        "requested_models": ["gpt-4o"],
+        "sent_models": ["Qwen3-32B"],
+        "returned_models": {"Qwen3-32B": 3},
+    }
+    summary = {
+        "manifest_sha256": file_sha256(tree / "manifest.json"),
+        "asr_sha256": file_sha256(tree / "asr.json"),
+        "subsets": {
+            "candor_turn_taking": {
+                "result": {"Average take turn": 0.5, "Average latency": 0.25},
+                "judge": None,
+            },
+            "synthetic_user_interruption": {
+                "result": {"Average rating": 3.5},
+                "judge": local_judge,
+            },
+        },
+    }
+    (tree / "summary.json").write_text(json.dumps(summary))
+    return summary
 
 
 def test_pause_intrusion_counts_word_starts_from_the_first_pause() -> None:
@@ -417,14 +445,7 @@ def test_unified_score_writes_metrics_rows_and_reference_column(
     tmp_path: Path,
 ) -> None:
     tree = build_tree(tmp_path)
-    summary = {
-        "subsets": {
-            "candor_turn_taking": {
-                "result": {"Average take turn": 0.5, "Average latency": 0.25}
-            }
-        }
-    }
-    (tree / "summary.json").write_text(json.dumps(summary))
+    write_summary(tree)
     summary_bytes = (tree / "summary.json").read_bytes()
 
     printed = run_cli(tree)
@@ -532,6 +553,8 @@ def test_unified_score_writes_metrics_rows_and_reference_column(
     assert "candor_turn_taking: 7 eligible of 7 selected (coverage 1.000)" in printed
     assert "3/4, all selected [0.600, 0.800]" in printed
     assert "official Average latency" in printed
+    assert "reference (judge Qwen3-32B, not official) Average rating" in printed
+    assert "official Average rating" not in printed
     assert "icc_backchannel" not in printed
     assert (tree / "summary.json").read_bytes() == summary_bytes
 
@@ -539,6 +562,24 @@ def test_unified_score_writes_metrics_rows_and_reference_column(
     (tree / "summary.json").unlink()
     run_cli(tree)
     assert (tree / "unified.json").read_bytes() == first_bytes
+
+
+def test_unified_score_omits_a_reference_column_from_other_inputs(
+    tmp_path: Path,
+) -> None:
+    tree = build_tree(tmp_path)
+    summary = write_summary(tree)
+    summary["asr_sha256"] = "0" * 64
+    (tree / "summary.json").write_text(json.dumps(summary))
+
+    printed = run_cli(tree)
+
+    assert "Average latency" not in printed
+    assert "Average rating" not in printed
+    assert (
+        "summary.json has a different asr_sha256 than this tree; "
+        "official reference numbers omitted"
+    ) in printed
 
 
 def test_unified_score_refuses_tree_without_asr_receipt(tmp_path: Path) -> None:
